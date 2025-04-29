@@ -6,6 +6,8 @@ from astropy.wcs import WCS
 from PIL import Image
 from reproject import reproject_interp
 import astroalign
+import matplotlib.pyplot as plt
+from concurrent.futures import ThreadPoolExecutor
 
 
 def find_fits_files(folder):
@@ -85,31 +87,49 @@ def align_to_reference(reference_path, target_path, vmin=None, vmax=None, return
             raise RuntimeError(f"Failed to align {target_path} by any method.")
 
 
+def load_fits_data_for_stretch(path, reference_path=None, use_alignment=True):
+    """
+    Loads FITS data for global stretching. Can align if needed.
+    """
+    try:
+        if reference_path and use_alignment:
+            data, _ = align_to_reference(reference_path, path, return_raw=True)
+        else:
+            with fits.open(path, memmap=False) as hdul:
+                data = hdul[0].data
+
+        if data is not None:
+            return np.nan_to_num(data, nan=0.0).flatten()
+    except Exception as e:
+        print(f"⚠️ Failed to load FITS for stretch: {path} - {e}")
+    
+    return None
+
+
 def get_global_stretch_limits(fits_paths, reference_path=None):
     """
-    Returns global vmin/vmax based on all aligned (or raw) FITS images.
+    Multithreaded version: loads all FITS frames in parallel and computes global vmin/vmax.
     """
     all_data = []
 
-    for i, path in enumerate(fits_paths):
-        if i == 0 or reference_path is None:
-            with fits.open(path, memmap=False) as hdul:
-                data = hdul[0].data
-        else:
-            data, _ = align_to_reference(reference_path, path, return_raw=True)
+    with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        futures = []
+        for path in fits_paths:
+            futures.append(executor.submit(load_fits_data_for_stretch, path, reference_path))
 
-        if data is not None:
-            data = np.nan_to_num(data, nan=0.0)
-            all_data.append(data.flatten())
+        for future in futures:
+            data = future.result()
+            if data is not None:
+                all_data.append(data)
+
+    if not all_data:
+        raise ValueError("No valid FITS data for global stretching.")
 
     stacked = np.concatenate(all_data)
     vmin = np.percentile(stacked, 1)
     vmax = np.percentile(stacked, 99)
-    return vmin, vmax, stacked  # <— include flattened data
+    return vmin, vmax, stacked
 
-# Lets fancy it up with a histogram
-
-import matplotlib.pyplot as plt
 
 def show_stretch_histogram(stacked_data, vmin, vmax):
     """

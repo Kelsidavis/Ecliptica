@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import pathlib
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import unzipper
 import fits_loader
@@ -145,22 +146,32 @@ class EclipticaApp:
         vmin, vmax, stacked_data = fits_loader.get_global_stretch_limits(fits_files, reference_fits)
         self.root.after(0, lambda: fits_loader.show_stretch_histogram(stacked_data, vmin, vmax))
 
-        frames = []
-        for i, fits_path in enumerate(fits_files):
-            if i == 0:
+        # Multi-threaded frame processing
+        def load_and_prepare_frame(index, fits_path, reference_fits, vmin, vmax, include_timestamps):
+            if index == 0:
                 frame = fits_loader.load_fits_image(fits_path, vmin=vmin, vmax=vmax)
             else:
                 frame = fits_loader.align_to_reference(reference_fits, fits_path, vmin=vmin, vmax=vmax)
 
-            if self.include_timestamps.get():
+            if include_timestamps:
                 timestamp = utils.get_timestamp_from_fits(fits_path)
                 text = timestamp.strftime("%Y-%m-%d %H:%M:%S")
                 frame = animator.draw_timestamp_on_image(frame, text)
 
-            frames.append(frame)
+            return index, frame
 
-            percent = (i + 1) / len(fits_files) * 100
-            self.root.after(0, lambda p=percent: self.progress_var.set(p))
+        frames = [None] * len(fits_files)
+        with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            futures = []
+            for idx, fits_path in enumerate(fits_files):
+                futures.append(executor.submit(load_and_prepare_frame, idx, fits_path, reference_fits, vmin, vmax, self.include_timestamps.get()))
+
+            for completed in as_completed(futures):
+                idx, frame = completed.result()
+                frames[idx] = frame
+
+                percent = (sum(f is not None for f in frames) / len(fits_files)) * 100
+                self.root.after(0, lambda p=percent: self.progress_var.set(p))
 
         base_name = os.path.splitext(os.path.basename(zip_path))[0]
         suggested_filename = base_name + (".gif" if self.output_format.get() == "GIF" else ".mp4")
