@@ -138,14 +138,14 @@ class EclipticaApp:
 
         frames = []
         for i, fits_path in enumerate(fits_files):
-            self.root.after(0, self.start_pulsing)
+            self.start_pulsing()
             try:
                 if i == 0:
                     frame = fits_loader.load_fits_image(fits_path, vmin=vmin, vmax=vmax)
                 else:
                     frame = fits_loader.align_to_reference(reference_fits, fits_path, vmin=vmin, vmax=vmax)
             finally:
-                self.root.after(0, self.stop_pulsing)
+                self.stop_pulsing()
 
             if self.include_timestamps.get():
                 timestamp = utils.get_timestamp_from_fits(fits_path)
@@ -160,12 +160,8 @@ class EclipticaApp:
         base_name = os.path.splitext(os.path.basename(zip_path))[0]
         suggested_filename = base_name + (".gif" if self.output_format.get() == "GIF" else ".mp4")
 
-        save_path = filedialog.asksaveasfilename(
-            defaultextension=".gif" if self.output_format.get() == "GIF" else ".mp4",
-            filetypes=[("GIF files", "*.gif"), ("MP4 files", "*.mp4")],
-            title="Save Animation As",
-            initialfile=suggested_filename
-        )
+        zip_dir = os.path.dirname(zip_path)
+        save_path = os.path.join(zip_dir, suggested_filename)
 
         if save_path:
             if self.output_format.get() == "GIF":
@@ -174,7 +170,7 @@ class EclipticaApp:
                 fps = max(1, 1000 // self.frame_duration.get())
                 animator.save_mp4(frames, save_path, fps=fps)
 
-            self.root.after(0, lambda: messagebox.showinfo("Success", f"Animation saved to:\n{save_path}"))
+            print(f"✅ Animation saved to: {save_path}")
 
         unzipper.cleanup_temp_dir(temp_dir)
 
