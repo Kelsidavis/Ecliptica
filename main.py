@@ -113,6 +113,7 @@ class EclipticaApp:
         thread.start()
 
     def process_zip_safe(self, zip_path):
+        self.start_pulsing()
         try:
             self.process_zip(zip_path)
         except Exception as e:
