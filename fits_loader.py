@@ -1,6 +1,4 @@
 # fits_loader.py
-# Loads and normalizes FITS files for Ecliptica animations
-
 import os
 import numpy as np
 from astropy.io import fits
@@ -9,11 +7,8 @@ from PIL import Image
 from reproject import reproject_interp
 import astroalign
 
+
 def find_fits_files(folder):
-    """
-    Recursively finds all FITS files in a given folder.
-    Returns a sorted list of full file paths.
-    """
     fits_files = []
     for root, _, files in os.walk(folder):
         for file in files:
@@ -21,10 +16,8 @@ def find_fits_files(folder):
                 fits_files.append(os.path.join(root, file))
     return sorted(fits_files)
 
-def load_fits_image(path, stretch_min_percent=1, stretch_max_percent=99):
-    """
-    Loads a FITS file and applies a linear stretch to scale it into an 8-bit grayscale PIL Image.
-    """
+
+def load_fits_image(path, vmin=None, vmax=None):
     with fits.open(path, memmap=False) as hdul:
         data = hdul[0].data
 
@@ -33,16 +26,16 @@ def load_fits_image(path, stretch_min_percent=1, stretch_max_percent=99):
 
     data = np.nan_to_num(data, nan=0.0)
 
-    vmin, vmax = np.percentile(data, (stretch_min_percent, stretch_max_percent))
-    scaled = np.clip((data - vmin) / (vmax - vmin) * 255.0, 0, 255).astype(np.uint8)
+    if vmin is None or vmax is None:
+        vmin, vmax = np.percentile(data, (1, 99))
 
+    scaled = np.clip((data - vmin) / (vmax - vmin) * 255.0, 0, 255).astype(np.uint8)
     return Image.fromarray(scaled)
 
-def align_to_reference(reference_path, target_path):
+
+def align_to_reference(reference_path, target_path, vmin=None, vmax=None, return_raw=False):
     """
-    Attempts to align the target image to the WCS of the reference image.
-    Falls back to astroalign if WCS fails. Returns a PIL 8-bit grayscale image.
-    Raises an exception if all alignment methods fail.
+    Aligns a FITS image to a reference WCS. Optionally returns raw float array (for global stretch scan).
     """
     try:
         with fits.open(reference_path, memmap=False) as ref_hdul:
@@ -61,13 +54,13 @@ def align_to_reference(reference_path, target_path):
             shape_out=ref_data.shape
         )
 
-        if not np.any(np.isfinite(aligned_data)) or np.nanmax(aligned_data) == np.nanmin(aligned_data):
-            raise ValueError("Reprojection returned invalid image.")
+        if return_raw:
+            return aligned_data, _
 
         aligned_data = np.nan_to_num(aligned_data, nan=0.0)
-        vmin, vmax = np.percentile(aligned_data, (1, 99))
-        if vmax - vmin == 0:
-            raise ValueError("Reprojected image has no contrast.")
+
+        if vmin is None or vmax is None:
+            vmin, vmax = np.percentile(aligned_data, (1, 99))
 
         scaled = np.clip((aligned_data - vmin) / (vmax - vmin) * 255.0, 0, 255).astype(np.uint8)
         return Image.fromarray(scaled)
@@ -78,11 +71,57 @@ def align_to_reference(reference_path, target_path):
 
         try:
             aligned = astroalign.register(target_data, ref_data)[0]
-            vmin, vmax = np.percentile(aligned, (1, 99))
-            if vmax - vmin == 0:
-                raise ValueError("Astroalign result has no contrast.")
+
+            if return_raw:
+                return aligned, None
+
+            vmin = np.percentile(aligned, 1) if vmin is None else vmin
+            vmax = np.percentile(aligned, 99) if vmax is None else vmax
+
             scaled = np.clip((aligned - vmin) / (vmax - vmin) * 255.0, 0, 255).astype(np.uint8)
             return Image.fromarray(scaled)
         except Exception as aa_error:
             print(f"❌ Astroalign also failed for {target_path}: {aa_error}")
             raise RuntimeError(f"Failed to align {target_path} by any method.")
+
+
+def get_global_stretch_limits(fits_paths, reference_path=None):
+    """
+    Returns global vmin/vmax based on all aligned (or raw) FITS images.
+    """
+    all_data = []
+
+    for i, path in enumerate(fits_paths):
+        if i == 0 or reference_path is None:
+            with fits.open(path, memmap=False) as hdul:
+                data = hdul[0].data
+        else:
+            data, _ = align_to_reference(reference_path, path, return_raw=True)
+
+        if data is not None:
+            data = np.nan_to_num(data, nan=0.0)
+            all_data.append(data.flatten())
+
+    stacked = np.concatenate(all_data)
+    vmin = np.percentile(stacked, 1)
+    vmax = np.percentile(stacked, 99)
+    return vmin, vmax, stacked  # <— include flattened data
+
+# Lets fancy it up with a histogram
+
+import matplotlib.pyplot as plt
+
+def show_stretch_histogram(stacked_data, vmin, vmax):
+    """
+    Displays a histogram of the stacked image pixel values and marks the stretch limits.
+    """
+    plt.figure(figsize=(8, 4))
+    plt.hist(stacked_data, bins=512, color='gray', alpha=0.7, log=True)
+    plt.axvline(vmin, color='red', linestyle='--', label=f'vmin = {vmin:.2f}')
+    plt.axvline(vmax, color='blue', linestyle='--', label=f'vmax = {vmax:.2f}')
+    plt.title("Global Pixel Value Histogram")
+    plt.xlabel("Pixel Value")
+    plt.ylabel("Log Count")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()

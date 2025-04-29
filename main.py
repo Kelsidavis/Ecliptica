@@ -23,7 +23,6 @@ class EclipticaApp:
         self.root.geometry("500x450")
         self.root.configure(bg='black')
 
-        # User settings
         self.output_format = tk.StringVar(value="GIF")
         self.frame_duration = tk.IntVar(value=100)
         self.include_timestamps = tk.BooleanVar(value=False)
@@ -133,14 +132,18 @@ class EclipticaApp:
         fits_files = utils.sort_files_by_timestamp(fits_files)
         reference_fits = fits_files[0]
 
+        vmin, vmax, stacked_data = fits_loader.get_global_stretch_limits(fits_files, reference_fits)
+        self.root.after(0, lambda: fits_loader.show_stretch_histogram(stacked_data, vmin, vmax))
+
+
         frames = []
         for i, fits_path in enumerate(fits_files):
             self.root.after(0, self.start_pulsing)
             try:
                 if i == 0:
-                    frame = fits_loader.load_fits_image(fits_path)
+                    frame = fits_loader.load_fits_image(fits_path, vmin=vmin, vmax=vmax)
                 else:
-                    frame = fits_loader.align_to_reference(reference_fits, fits_path)
+                    frame = fits_loader.align_to_reference(reference_fits, fits_path, vmin=vmin, vmax=vmax)
             finally:
                 self.root.after(0, self.stop_pulsing)
 
@@ -194,10 +197,11 @@ class EclipticaApp:
         self.root.dnd_unbind('<<Drop>>')
         self.root.title("Ecliptica - Working...")
 
-    def unlock_input(self):
-        self.button.config(state="normal")
-        self.root.dnd_bind('<<Drop>>', self.handle_drop)
-        self.root.title("Ecliptica - FITS Time-Lapse Animator")
+    def lock_input(self):
+        self.button.config(state="disabled")
+        self.root.dnd_bind('<<Drop>>', lambda e: None)
+        self.root.title("Ecliptica - Working...")
+
 
 
 if __name__ == "__main__":
